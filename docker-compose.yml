@@ -1,0 +1,10 @@
+version: '3'
+services:
+  db_poc:
+    image: pgvector/pgvector:pg14  # Versão compatível com a sua, mas já com a extensão
+    environment:
+      POSTGRES_USER: usuario
+      POSTGRES_PASSWORD: senha
+      POSTGRES_DB: rh_poc
+    ports:
+      - "5433:5432" # Porta diferente para não bater no seu projeto local
