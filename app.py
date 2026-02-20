@@ -4,6 +4,8 @@ from sqlalchemy import create_engine, Column, Integer, String, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from pgvector.sqlalchemy import Vector
 from sentence_transformers import SentenceTransformer
+# --- NOVA IMPORTAÇÃO ---
+from deep_translator import GoogleTranslator
 
 app = Flask(__name__)
 
@@ -12,10 +14,32 @@ DATABASE_URL = "postgresql://usuario:senha@localhost:5433/rh_poc"
 engine = create_engine(DATABASE_URL)
 Base = declarative_base()
 EMBEDDING_DIM = 384
-RESET_DB = False 
+RESET_DB = False
 
 print("--- CARREGANDO CÉREBRO DA IA ---")
 model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2', device='cpu')
+
+# --- SISTEMA DE TRADUÇÃO SOB DEMANDA (POC) ---
+print("--- INICIANDO MOTOR DE TRADUÇÃO (PT-BR) ---")
+translator = GoogleTranslator(source='en', target='pt')
+CACHE_TRADUCAO = {}
+
+def traduzir_ptbr(texto):
+    """Traduz o texto para PT-BR e salva em cache para buscas futuras ficarem instantâneas."""
+    if not texto: 
+        return texto
+    if texto in CACHE_TRADUCAO:
+        return CACHE_TRADUCAO[texto]
+    
+    try:
+        # Tenta traduzir
+        traduzido = translator.translate(texto)
+        CACHE_TRADUCAO[texto] = traduzido
+        return traduzido
+    except Exception as e:
+        # Se a internet cair ou o Google bloquear, retorna em inglês (Fallback seguro)
+        print(f"Erro ao traduzir '{texto}': {e}")
+        return texto
 
 # --- MODELAGEM DE DADOS ---
 class EscoSkillGroup(Base):
@@ -45,17 +69,14 @@ class IscoGroup(Base):
     label = Column(String(500))
 
 # --- INGESTÃO DE DADOS ---
-# (A função ingest_data permanece EXATAMENTE igual à sua versão anterior, 
-# não vou repeti-la inteira aqui para economizar espaço. Mantenha a sua!)
 def ingest_data():
-    pass 
+    pass # Mantido vazio pois seu banco via Docker já está populado perfeitamente!
 
 # --- FUNÇÕES DE HIERARQUIA ---
 def get_skill_hierarchy(session, start_parent_uri):
     tree = []
     current_uri = start_parent_uri
     safety_counter = 0 
-    
     while current_uri and safety_counter < 6:
         group = session.query(EscoSkillGroup).filter_by(uri=current_uri).first()
         if group:
@@ -78,7 +99,7 @@ def get_isco_hierarchy(session, isco_code):
     group_map = {g.code: g.label for g in groups}
     return [group_map.get(c, c) for c in codes]
 
-# --- ROTA PRINCIPAL (A MÁGICA ACONTECE AQUI) ---
+# --- ROTA PRINCIPAL ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     data = {"skills": [], "occupations": []}
@@ -99,11 +120,9 @@ def index():
                 score = (1 - d) * 100
                 hierarchy = get_skill_hierarchy(session, s.parent_uri)
                 
-                # Regra 1: Remover o "root" inútil da ESCO
                 if hierarchy and hierarchy[0].lower() in ['skills', 'knowledge', 'transversal skills and competences']:
                     hierarchy.pop(0)
 
-                # Regra 2: Escolher o título dinâmico baseado no Zoom
                 termo_exibicao = s.termo
                 if zoom_level != 'micro':
                     try:
@@ -115,10 +134,11 @@ def index():
                     except ValueError:
                         pass
 
+                # APLICANDO A TRADUÇÃO ANTES DE ENVIAR PARA A TELA
                 data["skills"].append({
-                    "termo_micro": s.termo,
-                    "termo_exibicao": termo_exibicao,
-                    "arvore": hierarchy, 
+                    "termo_micro": traduzir_ptbr(s.termo),
+                    "termo_exibicao": traduzir_ptbr(termo_exibicao),
+                    "arvore": [traduzir_ptbr(node) for node in hierarchy], 
                     "confianca": round(score, 1),
                     "cor": "bg-success" if score > 75 else "bg-warning" if score > 50 else "bg-danger"
                 })
@@ -130,11 +150,9 @@ def index():
                 score = (1 - d) * 100
                 hierarchy = get_isco_hierarchy(session, o.isco_code)
 
-                # Regra 1 (NOVA): Remover o "root" inútil da ISCO (Major Groups como "Professionals")
                 if hierarchy and len(hierarchy) > 1:
                     hierarchy.pop(0)
 
-                # Regra 2: Escolher o título dinâmico baseado no Zoom
                 termo_exibicao = o.termo
                 if zoom_level != 'micro':
                     try:
@@ -146,10 +164,11 @@ def index():
                     except ValueError:
                         pass
 
+                # APLICANDO A TRADUÇÃO ANTES DE ENVIAR PARA A TELA
                 data["occupations"].append({
-                    "termo_micro": o.termo,
-                    "termo_exibicao": termo_exibicao,
-                    "arvore": hierarchy,
+                    "termo_micro": traduzir_ptbr(o.termo),
+                    "termo_exibicao": traduzir_ptbr(termo_exibicao),
+                    "arvore": [traduzir_ptbr(node) for node in hierarchy],
                     "confianca": round(score, 1)
                 })
             session.close()
@@ -157,5 +176,5 @@ def index():
     return render_template('index.html', data=data, busca_anterior=texto_busca, zoom_level=zoom_level)
 
 if __name__ == '__main__':
-    # ingest_data() # (Descomente se precisar repopular, mas seu BD já tá pronto)
+    # ingest_data() 
     app.run(debug=True, port=5000)

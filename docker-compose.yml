@@ -1,10 +1,18 @@
-version: '3'
 services:
-  db_poc:
-    image: pgvector/pgvector:pg14  # Versão compatível com a sua, mas já com a extensão
+  vector_db:
+    image: pgvector/pgvector:pg14
+    container_name: poc_rh_vector
+    restart: always
     environment:
       POSTGRES_USER: usuario
       POSTGRES_PASSWORD: senha
       POSTGRES_DB: rh_poc
     ports:
-      - "5433:5432" # Porta diferente para não bater no seu projeto local
+      - "5433:5432"
+    volumes:
+      # Aqui está a mágica: isso salva os dados do banco no seu HD
+      - pgvector_data:/var/lib/postgresql/data
+
+volumes:
+  pgvector_data:
+    name: rh_poc_pgvector_data
