@@ -1,45 +1,29 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Semantic Skill Matcher</title>
+    <title>Semantic Skill Matcher POC</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }
         .card { background-color: #1e1e1e; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        .form-control { background-color: #2c2c2c; border: 1px solid #444; color: white; }
-        .form-control:focus { background-color: #333; color: white; border-color: #0d6efd; }
+        .form-control, .form-select { background-color: #2c2c2c; border: 1px solid #444; color: white; }
+        .form-control:focus, .form-select:focus { background-color: #333; color: white; border-color: #0d6efd; }
         
-        /* SKILLS: Layout Linear e Limpo */
-        .skill-item {
-            margin-bottom: 15px;
-            padding: 10px;
-            border-bottom: 1px solid #2c2c2c;
-        }
-        .skill-header {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
-        }
-        .skill-name { font-weight: 600; color: #fff; font-size: 1.05rem; }
-        .skill-percent { font-weight: bold; font-family: monospace; }
+        .result-box { background: #252525; padding: 12px; margin-bottom: 15px; border-radius: 4px; }
+        .skill-border { border-left: 4px solid #2ecc71; }
+        .occ-border { border-left: 4px solid #0d6efd; }
         
-        .progress {
-            height: 10px; /* Barra fina e elegante */
-            background-color: #2c2c2c;
-            border-radius: 5px;
-        }
-
-        /* ISCO: Contexto */
-        .isco-box { background: #252525; border-left: 4px solid #0d6efd; padding: 12px; margin-bottom: 15px; border-radius: 0 4px 4px 0;}
-        .isco-tree { font-size: 0.85rem; color: #aaa; margin-top: 5px; }
-        .isco-sep { color: #555; margin: 0 5px; }
-        .isco-highlight { color: #fff; font-weight: bold; }
+        .tree-container { background-color: #1a1a1a; border-radius: 8px; padding: 15px; margin-bottom: 12px; border: 1px solid #333; }
+        .tree-node { padding: 4px 0; color: #999; font-size: 0.95rem; position: relative; }
         
-        /* Cores de Texto baseadas no Bootstrap */
-        .text-success-custom { color: #2ecc71; }
-        .text-warning-custom { color: #f1c40f; }
-        .text-danger-custom { color: #e74c3c; }
+        .target-node { color: #0d6efd; font-weight: bold; font-size: 1.1rem; background-color: rgba(13, 110, 253, 0.1); padding: 4px 8px; border-radius: 4px; }
+        
+        /* Aumentei a fonte do highlight principal */
+        .term-highlight { color: #fff; font-weight: bold; font-size: 1.25rem; }
+        .micro-subtitle { color: #888; font-size: 0.85rem; display: block; margin-top: -5px; margin-bottom: 10px; }
+        
+        .progress { height: 8px; background-color: #111; border-radius: 4px; margin-top: 8px; }
     </style>
 </head>
 <body>
@@ -49,9 +33,22 @@
 
     <div class="card p-4 mb-5">
         <form method="POST" action="/">
-            <label class="form-label text-light fw-bold">Perfil ou Descrição:</label>
-            <textarea class="form-control mb-3" name="skill_desc" rows="3" placeholder="Ex: Sou projetista de painéis elétricos...">{{ busca_anterior }}</textarea>
-            <button type="submit" class="btn btn-primary w-100 fw-bold py-2">⚡ Analisar Perfil Completo</button>
+            <div class="mb-3">
+                <label class="form-label text-light fw-bold">Profile or Description:</label>
+                <textarea class="form-control" name="skill_desc" rows="3" placeholder="e.g. I build responsive user interfaces using JS...">{{ busca_anterior }}</textarea>
+            </div>
+            
+            <div class="mb-4">
+                <label class="form-label text-light fw-bold">Select Zoom Level (Granularity):</label>
+                <select class="form-select" name="zoom_level">
+                    <option value="1" {% if zoom_level == '1' %}selected{% endif %}>Nível 1 (Marco Domínio)</option>
+                    <option value="2" {% if zoom_level == '2' %}selected{% endif %}>Nível 2 (Grupo Geral)</option>
+                    <option value="3" {% if zoom_level == '3' %}selected{% endif %}>Nível 3 (Grupo Específico)</option>
+                    <option value="micro" {% if zoom_level == 'micro' %}selected{% endif %}>Nível 4 (Correspondência exata)</option>
+                </select>
+            </div>
+            
+            <button type="submit" class="btn btn-primary w-100 fw-bold py-2">⚡ Analyze Profile</button>
         </form>
     </div>
 
@@ -59,55 +56,88 @@
     <div class="row">
         
         <div class="col-md-6 mb-4">
-            <h4 class="text-white border-bottom border-warning pb-2 mb-4">
-                🛠️ Habilidades Técnicas
-            </h4>
+            <h4 class="text-white border-bottom border-success pb-2 mb-4">🛠️ Technical Skills (ESCO)</h4>
             
-            <div class="card p-3">
-                {% for skill in data.skills %}
-                <div class="skill-item">
-                    <div class="skill-header">
-                        <span class="skill-name">{{ skill.termo }}</span>
-                        <span class="skill-percent 
-                            {% if skill.confianca > 75 %}text-success-custom
-                            {% elif skill.confianca > 50 %}text-warning-custom
-                            {% else %}text-danger-custom{% endif %}">
-                            {{ skill.confianca }}%
-                        </span>
+            {% for skill in data.skills %}
+            <div class="result-box skill-border">
+                
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <div>
+                        <span class="term-highlight">{{ skill.termo_exibicao }}</span>
+                        {% if zoom_level != 'micro' %}
+                        <span class="micro-subtitle">Derivado de: {{ skill.termo_micro }}</span>
+                        {% endif %}
                     </div>
-                    <div class="progress">
-                        <div class="progress-bar {{ skill.cor }}" role="progressbar" 
-                             style="width: {{ skill.confianca }}%" 
-                             aria-valuenow="{{ skill.confianca }}" aria-valuemin="0" aria-valuemax="100">
+                    <span class="badge bg-dark border border-secondary">{{ skill.confianca }}%</span>
+                </div>
+
+                <button class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button" data-bs-toggle="collapse" data-bs-target="#tree-skill-{{ loop.index }}" aria-expanded="false">
+                    👁️ Toggle Hierarchy View
+                </button>
+
+                <div class="collapse" id="tree-skill-{{ loop.index }}">
+                    <div class="tree-container">
+                        {% if skill.arvore %}
+                            {% for node in skill.arvore %}
+                                {% set is_target = (zoom_level|string == loop.index|string) %}
+                                <div class="tree-node {% if is_target %}target-node{% endif %}" style="margin-left: {{ loop.index0 * 15 }}px;">
+                                    {% if loop.index0 > 0 %} ↳ {% endif %}
+                                    {% if is_target %}🎯 {% endif %}{{ node }}
+                                </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="tree-node text-warning">Root Category</div>
+                        {% endif %}
+                        
+                        <div class="tree-node {% if zoom_level == 'micro' %}target-node{% endif %}" style="margin-left: {{ skill.arvore|length * 15 }}px; margin-top: 8px;">
+                            ↳ {% if zoom_level == 'micro' %}🎯 {% endif %}<strong>{{ skill.termo_micro }}</strong> (Micro Skill)
                         </div>
                     </div>
                 </div>
-                {% endfor %}
+                
+                <div class="progress">
+                    <div class="progress-bar {{ skill.cor }}" style="width: {{ skill.confianca }}%"></div>
+                </div>
             </div>
+            {% endfor %}
         </div>
 
         <div class="col-md-6">
-            <h4 class="text-white border-bottom border-primary pb-2 mb-4">
-                🏭 Cargo & Hierarquia
-            </h4>
+            <h4 class="text-white border-bottom border-primary pb-2 mb-4">🏭 Occupations & Industry (ISCO)</h4>
             
             {% for occ in data.occupations %}
-            <div class="isco-box">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h5 class="mb-0 text-primary fw-bold">{{ occ.termo }}</h5>
+            <div class="result-box occ-border">
+                
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <div>
+                        <span class="term-highlight">{{ occ.termo_exibicao }}</span>
+                        {% if zoom_level != 'micro' %}
+                        <span class="micro-subtitle">Derived from: {{ occ.termo_micro }}</span>
+                        {% endif %}
+                    </div>
                     <span class="badge bg-dark border border-secondary">{{ occ.confianca }}%</span>
                 </div>
-                
-                <div class="isco-tree">
-                    {% for nivel in occ.arvore %}
-                        {% if loop.last %}
-                            <span class="isco-highlight">{{ nivel.label }}</span>
-                        {% else %}
-                            <span title="Código: {{ nivel.code }}">{{ nivel.label }}</span>
-                            <span class="isco-sep">›</span>
-                        {% endif %}
-                    {% endfor %}
+
+                <button class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button" data-bs-toggle="collapse" data-bs-target="#tree-occ-{{ loop.index }}" aria-expanded="false">
+                    👁️ Toggle Hierarchy View
+                </button>
+
+                <div class="collapse" id="tree-occ-{{ loop.index }}">
+                    <div class="tree-container">
+                        {% for node in occ.arvore %}
+                            {% set is_target = (zoom_level|string == loop.index|string) %}
+                            <div class="tree-node {% if is_target %}target-node{% endif %}" style="margin-left: {{ loop.index0 * 15 }}px;">
+                                {% if loop.index0 > 0 %} ↳ {% endif %}
+                                {% if is_target %}🎯 {% endif %}{{ node }}
+                            </div>
+                        {% endfor %}
+                        
+                        <div class="tree-node {% if zoom_level == 'micro' %}target-node{% endif %}" style="margin-left: {{ occ.arvore|length * 15 }}px; margin-top: 8px;">
+                            ↳ {% if zoom_level == 'micro' %}🎯 {% endif %}<strong>{{ occ.termo_micro }}</strong> (Micro Occupation)
+                        </div>
+                    </div>
                 </div>
+
             </div>
             {% endfor %}
         </div>
@@ -116,5 +146,6 @@
     {% endif %}
 
 </div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
