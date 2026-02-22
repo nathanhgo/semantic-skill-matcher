@@ -14,7 +14,7 @@ DATABASE_URL = "postgresql://usuario:senha@localhost:5433/rh_poc"
 engine = create_engine(DATABASE_URL)
 Base = declarative_base()
 EMBEDDING_DIM = 384
-RESET_DB = False
+RESET_DB = True
 
 print("--- CARREGANDO CÉREBRO DA IA ---")
 model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2', device='cpu')
@@ -70,7 +70,101 @@ class IscoGroup(Base):
 
 # --- INGESTÃO DE DADOS ---
 def ingest_data():
-    pass # Mantido vazio pois seu banco via Docker já está populado perfeitamente!
+    if RESET_DB:
+        print("!!! LIMPANDO BANCO DE DADOS PARA NOVA ESTRUTURA !!!")
+        Base.metadata.drop_all(engine)
+    
+    with engine.connect() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.commit()
+    Base.metadata.create_all(engine)
+    
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    # 1. Carregar Hierarquia ISCO
+    if session.query(IscoGroup).count() == 0:
+        print("Ingerindo ISCO Groups...")
+        try:
+            df = pd.read_csv('ISCOGroups_en.csv')
+            df['code'] = df['code'].astype(str)
+            df = df.drop_duplicates(subset=['code'], keep='last')
+            for _, row in df.iterrows():
+                session.add(IscoGroup(code=str(row['code']), label=row['preferredLabel']))
+            session.commit()
+        except Exception as e: print(f"Erro ISCO: {e}")
+
+    # 2. Carregar Mapa de Relações de Skills (Pai e Filho)
+    print("Carregando Mapa de Relações...")
+    rel_dict = {}
+    try:
+        df_rel = pd.read_csv('broaderRelationsSkillPillar_en.csv', usecols=['conceptUri', 'broaderUri'])
+        df_rel = df_rel.drop_duplicates(subset=['conceptUri'], keep='first')
+        rel_dict = pd.Series(df_rel.broaderUri.values, index=df_rel.conceptUri).to_dict()
+    except Exception as e:
+        print(f"Aviso: Mapa de relações não carregado ({e}). Hierarquia de skills ficará vazia.")
+
+    # 3. Carregar Grupos de Skills (Níveis Macro)
+    if session.query(EscoSkillGroup).count() == 0:
+        print("Ingerindo Skill Groups...")
+        try:
+            df_grp = pd.read_csv('skillGroups_en.csv', usecols=['conceptUri', 'preferredLabel'])
+            objs = []
+            for _, row in df_grp.iterrows():
+                uri = row['conceptUri']
+                parent = rel_dict.get(uri) 
+                objs.append(EscoSkillGroup(uri=uri, termo=row['preferredLabel'], parent_uri=parent))
+            session.add_all(objs)
+            session.commit()
+        except Exception as e: print(f"Erro Skill Groups: {e}")
+
+    # 4. Carregar Skills (Com vetorização)
+    if session.query(EscoSkill).count() == 0:
+        print("Ingerindo Skills...")
+        try:
+            df_en = pd.read_csv('skills_en.csv', usecols=['conceptUri', 'preferredLabel'])
+            df_en = df_en.drop_duplicates(subset=['preferredLabel'])
+            
+            termos = df_en['preferredLabel'].tolist()
+            uris = df_en['conceptUri'].tolist()
+            
+            for i in range(0, len(termos), 64):
+                batch_termos = termos[i:i+64]
+                batch_uris = uris[i:i+64]
+                vetores = model.encode(batch_termos)
+                
+                objs = []
+                for termo, uri, vetor in zip(batch_termos, batch_uris, vetores):
+                    parent = rel_dict.get(uri) 
+                    objs.append(EscoSkill(uri=uri, termo=termo, parent_uri=parent, embedding=vetor.tolist()))
+                session.add_all(objs)
+                session.commit()
+                print(f"Skills: {i}/{len(termos)}", end='\r')
+        except Exception as e: print(f"Erro Skills: {e}")
+
+    # 5. Carregar Occupations
+    if session.query(EscoOccupation).count() == 0:
+        print("\nIngerindo Occupations...")
+        try:
+            df_occ = pd.read_csv('occupations_en.csv', usecols=['preferredLabel', 'iscoGroup'])
+            df_occ = df_occ.drop_duplicates(subset=['preferredLabel'])
+            termos = df_occ['preferredLabel'].dropna().tolist()
+            termo_to_isco = pd.Series(df_occ.iscoGroup.values, index=df_occ.preferredLabel).to_dict()
+            
+            for i in range(0, len(termos), 64):
+                batch = termos[i:i+64]
+                vetores = model.encode(batch)
+                objs = []
+                for t, v in zip(batch, vetores):
+                    code = str(termo_to_isco.get(t, "0000"))
+                    if code.lower() == 'nan': code = "0000"
+                    objs.append(EscoOccupation(termo=t, isco_code=code, embedding=v.tolist()))
+                session.add_all(objs)
+                session.commit()
+                print(f"Occs: {i}/{len(termos)}", end='\r')
+        except Exception as e: print(f"Erro Occs: {e}")
+
+    session.close()
 
 # --- FUNÇÕES DE HIERARQUIA ---
 def get_skill_hierarchy(session, start_parent_uri):
@@ -176,5 +270,5 @@ def index():
     return render_template('index.html', data=data, busca_anterior=texto_busca, zoom_level=zoom_level)
 
 if __name__ == '__main__':
-    # ingest_data() 
+    ingest_data() 
     app.run(debug=True, port=5000)
